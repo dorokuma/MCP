@@ -920,7 +920,7 @@ export function registerJinaTools(server: McpServer, getProps: () => any, enable
 							'Authorization': `Bearer ${props.bearerToken}`,
 						},
 						body: JSON.stringify({
-							model: 'jina-reranker-v3',
+							model: 'jina-reranker-v3.5',
 							query,
 							top_n: top_n || documents.length,
 							documents
