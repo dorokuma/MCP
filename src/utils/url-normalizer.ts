@@ -45,7 +45,9 @@ export function normalizeUrl(urlString: string, options = {
 		const filteredParams = Array.from(searchParams.entries())
 			.filter(([key]) => {
 				if (key === '') return false;
-				if (options.removeSessionIDs && /^(s|session|sid|sessionid|phpsessid|jsessionid|aspsessionid|asp\.net_sessionid)$/i.test(key)) {
+				// note: `s` is deliberately absent - it is a search parameter on WordPress
+				// and many other sites, not a session ID
+				if (options.removeSessionIDs && /^(session|sid|sessionid|phpsessid|jsessionid|aspsessionid|asp\.net_sessionid)$/i.test(key)) {
 					return false;
 				}
 				if (options.removeUTMParams && /^utm_/i.test(key)) {
