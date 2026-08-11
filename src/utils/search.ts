@@ -165,101 +165,244 @@ export async function executeSsrnSearch(
     }
 }
 
-/**
- * Execute a single Jina blog search using Ghost Content API
- */
-export async function executeJinaBlogSearch(
-    searchArgs: SearchJinaBlogArgs,
-    ghostApiKey: string
-): Promise<SearchResultOrError> {
+// ============================================================================
+// JINA BLOG SEARCH
+// ============================================================================
+
+// Ghost's Content API has no full-text search: `filter` only does substring
+// matching on a handful of fields. Any multi-word query therefore matched
+// nothing. Instead we pull the whole (small) post catalog once, cache it, and
+// rank it locally, optionally reordering the top candidates with the reranker.
+
+const GHOST_POSTS_ENDPOINT = 'https://cms.jina.ai/ghost/api/content/posts/';
+const BLOG_CACHE_TTL_MS = 10 * 60 * 1000;
+const BLOG_RERANK_CANDIDATES = 50;
+
+interface BlogPostResult {
+    title: string;
+    url: string;
+    snippet?: string;
+    date?: string;
+    reading_time?: number;
+}
+
+interface IndexedBlogPost {
+    post: BlogPostResult;
+    publishedAt: number;
+    titleText: string;
+    titleTokens: Set<string>;
+    bodyTokens: Set<string>;
+}
+
+export interface JinaBlogRerankConfig {
+    bearerToken?: string;
+    apiBaseUrl?: string;
+}
+
+let blogPostCache: { fetchedAt: number; posts: IndexedBlogPost[] } | null = null;
+
+const BLOG_STOPWORDS = new Set([
+    'a', 'about', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'can', 'do', 'does',
+    'for', 'from', 'how', 'in', 'into', 'is', 'it', 'its', 'me', 'my', 'not', 'of',
+    'on', 'or', 'our', 'so', 'than', 'that', 'the', 'their', 'then', 'there',
+    'these', 'they', 'this', 'those', 'to', 'us', 'use', 'using', 'via', 'was',
+    'we', 'what', 'when', 'where', 'which', 'who', 'why', 'will', 'with', 'work',
+    'you', 'your'
+]);
+
+/** Crude singular folding so "embeddings" and "embedding" collide */
+function stemBlogToken(token: string): string {
+    if (token.length > 3 && token.endsWith('s') && !token.endsWith('ss')) {
+        return token.slice(0, -1);
+    }
+    return token;
+}
+
+function tokenizeBlogText(text: string): string[] {
+    return (text || '')
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter(token => token.length > 1 && !BLOG_STOPWORDS.has(token))
+        .map(stemBlogToken);
+}
+
+/** Ghost CMS URLs are not the public ones the blog is served from */
+function toPublicBlogUrl(post: any): string {
+    let url = post.url || `https://jina.ai/news/${post.slug}`;
+    if (url.includes('cms.jina.ai')) {
+        url = url.replace('https://cms.jina.ai/', 'https://jina.ai/news/');
+    } else if (url.includes('jina-ai-gmbh.ghost.io')) {
+        url = url.replace('https://jina-ai-gmbh.ghost.io/podcast/', 'https://jina.ai/news/');
+        url = url.replace('https://jina-ai-gmbh.ghost.io/', 'https://jina.ai/news/');
+    }
+    return url;
+}
+
+/** Fetch and index the full post catalog, memoized per isolate */
+async function fetchIndexedBlogPosts(ghostApiKey: string): Promise<IndexedBlogPost[]> {
+    if (blogPostCache && Date.now() - blogPostCache.fetchedAt < BLOG_CACHE_TTL_MS) {
+        return blogPostCache.posts;
+    }
+
+    const params = new URLSearchParams({
+        key: ghostApiKey,
+        limit: 'all',
+        fields: 'id,title,slug,excerpt,published_at,url,reading_time',
+        order: 'published_at desc'
+    });
+
+    const response = await fetch(`${GHOST_POSTS_ENDPOINT}?${params.toString()}`, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+    });
+
+    if (!response.ok) {
+        throw new Error(`Ghost Content API returned ${response.status} ${response.statusText}`);
+    }
+
+    const data = await response.json() as any;
+    const posts: IndexedBlogPost[] = (data.posts || []).map((post: any) => {
+        const title = post.title || '';
+        const excerpt = post.excerpt || '';
+        return {
+            post: {
+                title,
+                url: toPublicBlogUrl(post),
+                snippet: excerpt,
+                date: post.published_at,
+                reading_time: post.reading_time
+            },
+            publishedAt: post.published_at ? Date.parse(post.published_at) : 0,
+            titleText: title.toLowerCase(),
+            titleTokens: new Set([...tokenizeBlogText(title), ...tokenizeBlogText(post.slug || '')]),
+            bodyTokens: new Set(tokenizeBlogText(excerpt))
+        };
+    });
+
+    blogPostCache = { fetchedAt: Date.now(), posts };
+    return posts;
+}
+
+/** Cutoff timestamp for a Google-style tbs parameter, or null if absent/unknown */
+function resolveTbsCutoff(tbs?: string): number | null {
+    const windows: Record<string, number> = {
+        'qdr:h': 60 * 60 * 1000,
+        'qdr:d': 24 * 60 * 60 * 1000,
+        'qdr:w': 7 * 24 * 60 * 60 * 1000,
+        'qdr:m': 30 * 24 * 60 * 60 * 1000,
+        'qdr:y': 365 * 24 * 60 * 60 * 1000,
+    };
+    const span = tbs ? windows[tbs] : undefined;
+    return span ? Date.now() - span : null;
+}
+
+/** TF-IDF-ish lexical scoring over title (weighted) and excerpt */
+function scoreBlogPosts(query: string, posts: IndexedBlogPost[]): IndexedBlogPost[] {
+    const queryTokens = Array.from(new Set(tokenizeBlogText(query)));
+    if (queryTokens.length === 0 || posts.length === 0) {
+        return [];
+    }
+
+    const phrase = query.trim().toLowerCase();
+    const idf = new Map<string, number>();
+    for (const token of queryTokens) {
+        const df = posts.filter(p => p.titleTokens.has(token) || p.bodyTokens.has(token)).length;
+        idf.set(token, Math.log(1 + posts.length / (1 + df)));
+    }
+
+    const scored: Array<{ entry: IndexedBlogPost; score: number }> = [];
+    for (const entry of posts) {
+        let score = 0;
+        for (const token of queryTokens) {
+            const weight = idf.get(token) || 0;
+            if (entry.titleTokens.has(token)) score += 3 * weight;
+            if (entry.bodyTokens.has(token)) score += weight;
+        }
+        // reward exact phrase hits so "late chunking" beats posts matching either word
+        if (phrase.length > 2 && entry.titleText.includes(phrase)) {
+            score += 5;
+        }
+        if (score > 0) {
+            scored.push({ entry, score });
+        }
+    }
+
+    scored.sort((a, b) => b.score - a.score || b.entry.publishedAt - a.entry.publishedAt);
+    return scored.map(s => s.entry);
+}
+
+/** Reorder candidates with jina-reranker; returns null so callers can fall back */
+async function rerankBlogPosts(
+    query: string,
+    candidates: IndexedBlogPost[],
+    config?: JinaBlogRerankConfig
+): Promise<IndexedBlogPost[] | null> {
+    if (!config?.bearerToken || candidates.length < 2) {
+        return null;
+    }
+
     try {
-        const limit = searchArgs.num || 30;
-
-        // Build filter for Ghost NQL
-        // Ghost Content API only supports filtering on specific fields (title, tag, author, etc.)
-        // Full-text search on content/excerpt is not supported - only substring matching on title
-        const filters: string[] = [];
-
-        // Search in title using contains operator
-        if (searchArgs.query) {
-            // Escape single quotes in query
-            const escapedQuery = searchArgs.query.replace(/'/g, "\\'");
-            filters.push(`title:~'${escapedQuery}'`);
-        }
-
-        // Map tbs (time-based search) to Ghost's published_at filter
-        if (searchArgs.tbs) {
-            const now = new Date();
-            let dateFilter: Date | null = null;
-
-            switch (searchArgs.tbs) {
-                case 'qdr:h': // past hour
-                    dateFilter = new Date(now.getTime() - 60 * 60 * 1000);
-                    break;
-                case 'qdr:d': // past day
-                    dateFilter = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-                    break;
-                case 'qdr:w': // past week
-                    dateFilter = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-                    break;
-                case 'qdr:m': // past month
-                    dateFilter = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-                    break;
-                case 'qdr:y': // past year
-                    dateFilter = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
-                    break;
-            }
-
-            if (dateFilter) {
-                filters.push(`published_at:>'${dateFilter.toISOString()}'`);
-            }
-        }
-
-        // Build URL with query parameters
-        const params = new URLSearchParams({
-            key: ghostApiKey,
-            limit: limit.toString(),
-            fields: 'id,title,slug,excerpt,published_at,url,reading_time',
-            order: 'published_at desc'
-        });
-
-        if (filters.length > 0) {
-            params.set('filter', filters.join('+'));
-        }
-
-        const response = await fetch(`https://cms.jina.ai/ghost/api/content/posts/?${params.toString()}`, {
-            method: 'GET',
+        const response = await fetch(`${config.apiBaseUrl || 'https://api.jina.ai'}/v1/rerank`, {
+            method: 'POST',
             headers: {
                 'Accept': 'application/json',
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${config.bearerToken}`,
             },
+            body: JSON.stringify({
+                model: 'jina-reranker-v3.5',
+                query,
+                top_n: candidates.length,
+                documents: candidates.map(c => `${c.post.title}\n${c.post.snippet || ''}`.trim())
+            }),
         });
 
         if (!response.ok) {
-            return { error: `Jina blog search failed for query "${searchArgs.query}": ${response.statusText}` };
+            return null;
         }
 
         const data = await response.json() as any;
+        if (!Array.isArray(data.results) || data.results.length === 0) {
+            return null;
+        }
 
-        // Transform Ghost posts to search result format
-        const results = (data.posts || []).map((post: any) => {
-            // Transform Ghost CMS URL to jina.ai/news URL
-            let url = post.url || `https://jina.ai/news/${post.slug}`;
-            if (url.includes('cms.jina.ai')) {
-                url = url.replace('https://cms.jina.ai/', 'https://jina.ai/news/');
-            } else if (url.includes('jina-ai-gmbh.ghost.io')) {
-                url = url.replace('https://jina-ai-gmbh.ghost.io/podcast/', 'https://jina.ai/news/');
-                url = url.replace('https://jina-ai-gmbh.ghost.io/', 'https://jina.ai/news/');
-            }
-            return {
-                title: post.title,
-                url,
-                snippet: post.excerpt,
-                date: post.published_at,
-                reading_time: post.reading_time
-            };
-        });
+        const ordered = data.results
+            .map((result: any) => candidates[result.index])
+            .filter((entry: IndexedBlogPost | undefined): entry is IndexedBlogPost => Boolean(entry));
 
-        return { query: searchArgs.query, results };
+        return ordered.length > 0 ? ordered : null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Execute a single Jina blog search over the Ghost post catalog
+ */
+export async function executeJinaBlogSearch(
+    searchArgs: SearchJinaBlogArgs,
+    ghostApiKey: string,
+    rerankConfig?: JinaBlogRerankConfig
+): Promise<SearchResultOrError> {
+    try {
+        const limit = Math.min(Math.max(searchArgs.num || 30, 1), 100);
+
+        let posts = await fetchIndexedBlogPosts(ghostApiKey);
+
+        const cutoff = resolveTbsCutoff(searchArgs.tbs);
+        if (cutoff !== null) {
+            posts = posts.filter(entry => entry.publishedAt >= cutoff);
+        }
+
+        // lexical matching decides *which* posts are relevant, the reranker only
+        // decides their order - relevance scores are not calibrated enough to use
+        // as a cutoff, so an unmatched query honestly returns nothing
+        const matches = scoreBlogPosts(searchArgs.query, posts);
+        const candidates = matches.slice(0, Math.max(BLOG_RERANK_CANDIDATES, limit));
+
+        const ordered = await rerankBlogPosts(searchArgs.query, candidates, rerankConfig) || candidates;
+
+        return { query: searchArgs.query, results: ordered.slice(0, limit).map(entry => entry.post) };
     } catch (error) {
         return { error: `Jina blog search failed for query "${searchArgs.query}": ${error instanceof Error ? error.message : String(error)}` };
     }

@@ -509,10 +509,13 @@ export function registerJinaTools(server: McpServer, getProps: () => any, enable
 						return createErrorResponse("Ghost API key not configured");
 					}
 
+					// Optional semantic reordering of the lexically matched posts
+					const rerankConfig = { bearerToken: props.bearerToken, apiBaseUrl: props.apiBaseUrl };
+
 					// Handle single query or single-element array
 					if (typeof query === 'string' || (Array.isArray(query) && query.length === 1)) {
 						const singleQuery = typeof query === 'string' ? query : query[0];
-						const searchResult = await executeJinaBlogSearch({ query: singleQuery, num, tbs }, ghostApiKey);
+						const searchResult = await executeJinaBlogSearch({ query: singleQuery, num, tbs }, ghostApiKey, rerankConfig);
 
 						return {
 							content: formatSingleSearchResultToContentItems(searchResult),
@@ -528,7 +531,7 @@ export function registerJinaTools(server: McpServer, getProps: () => any, enable
 						);
 
 						const jinaBlogSearchFunction = async (searchArgs: SearchJinaBlogArgs) => {
-							return executeJinaBlogSearch(searchArgs, ghostApiKey);
+							return executeJinaBlogSearch(searchArgs, ghostApiKey, rerankConfig);
 						};
 
 						const results = await executeParallelSearches(uniqueSearches, jinaBlogSearchFunction, { timeout: 30000 });
