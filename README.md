@@ -13,7 +13,7 @@ A remote Model Context Protocol (MCP) server that provides access to Jina Reader
 | `capture_screenshot_url` | Capture high-quality screenshots of web pages via [Reader API](https://jina.ai/reader) | Optional* |
 | `guess_datetime_url` | Analyze web pages for last update/publish datetime with confidence scores | No |
 | `search_web` | Search the entire web for current information and news via [Reader API](https://jina.ai/reader) | Yes |
-| `search_web_deep` | Search the web, read the result pages, and return the best-matching paragraph-length passage from each, re-ranked by relevance (typically 2-20s) via [Reader API](https://jina.ai/reader) | Yes |
+| `search_web_deep` | Search the web, read each result page via [Reader API](https://jina.ai/reader), then score every passage against the query in one listwise [Reranker API](https://jina.ai/reranker) call (`jina-reranker-v3.5`) to return the best paragraph-length passage from each page (typically 2-20s) | Yes |
 | `search_arxiv` | Search academic papers and preprints on arXiv repository via [Reader API](https://jina.ai/reader) | Yes |
 | `search_ssrn` | Search academic papers on SSRN (Social Science Research Network) via [Reader API](https://jina.ai/reader) | Yes |
 | `search_images` | Search for images across the web (similar to Google Images) via [Reader API](https://jina.ai/reader) | Yes |
