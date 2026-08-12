@@ -8,11 +8,13 @@ import { applyTokenGuardrail } from "../utils/token-guardrail.js";
 import {
 	executeParallelSearches,
 	executeWebSearch,
+	executeWebDeepSearch,
 	executeArxivSearch,
 	executeSsrnSearch,
 	executeImageSearch,
 	executeJinaBlogSearch,
 	type SearchWebArgs,
+	type SearchWebDeepArgs,
 	type SearchArxivArgs,
 	type SearchSsrnArgs,
 	type SearchImageArgs,
@@ -345,6 +347,39 @@ export function registerJinaTools(server: McpServer, getProps: () => any, enable
 					}
 
 					return createErrorResponse("Invalid query format");
+				} catch (error) {
+					return createErrorResponse(`Error: ${error instanceof Error ? error.message : String(error)}`);
+				}
+			},
+		);
+	}
+
+	// Search Web Deep tool - deep web search with content-grounded snippets
+	if (isToolEnabled("search_web_deep")) {
+		server.tool(
+			"search_web_deep",
+			"Search the web and return content-grounded, relevance-ranked snippets. Unlike regular web search which relies on SERP snippets, deep search reads the actual content of each result page, extracts the most relevant passage for your query, and re-ranks all results by semantic relevance. Best for questions where the answer is buried in page content rather than titles or descriptions. Slower than search_web (15-40s) but returns substantially higher-quality, answer-ready snippets.",
+			{
+				query: z.string().describe("Search terms or question to answer (e.g., 'how does TCP slow start work', 'what causes memory fragmentation')"),
+				num: z.number().int().min(1).max(10).default(5).describe("Number of results to return (1-10). Each result is drawn from a fully-read page; higher numbers take longer."),
+			},
+			async ({ query, num }: { query: string; num: number }) => {
+				try {
+					const props = getProps();
+
+					const tokenError = checkBearerToken(props.bearerToken);
+					if (tokenError) {
+						return tokenError;
+					}
+
+					const searchResult = await executeWebDeepSearch(
+						{ query, num } as SearchWebDeepArgs,
+						props.bearerToken as string
+					);
+
+					return {
+						content: formatSingleSearchResultToContentItems(searchResult),
+					};
 				} catch (error) {
 					return createErrorResponse(`Error: ${error instanceof Error ? error.message : String(error)}`);
 				}

@@ -475,6 +475,52 @@ export async function executeImageSearch(
 }
 
 // ============================================================================
+// DEEP WEB SEARCH
+// ============================================================================
+
+const DEEP_SEARCH_REQUEST_TIMEOUT_MS = 60000;
+
+export interface SearchWebDeepArgs {
+    query: string;
+    num?: number;
+}
+
+export async function executeWebDeepSearch(
+    searchArgs: SearchWebDeepArgs,
+    bearerToken: string
+): Promise<SearchResultOrError> {
+    try {
+        const num = Math.min(Math.max(searchArgs.num || 5, 1), 10);
+        const readNum = Math.min(num + 3, 10);
+        const response = await fetch('https://svip.jina.ai/', {
+            method: 'POST',
+            signal: AbortSignal.timeout(DEEP_SEARCH_REQUEST_TIMEOUT_MS),
+            headers: {
+                'Accept': 'application/json',
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${bearerToken}`,
+            },
+            body: JSON.stringify({
+                q: searchArgs.query,
+                meta: 'deep',
+                num,
+                read_num: readNum,
+                deep_timeout: 25000,
+            }),
+        });
+
+        if (!response.ok) {
+            return { error: `Deep web search failed for query "${searchArgs.query}": ${response.statusText}` };
+        }
+
+        const data = await response.json() as any;
+        return { query: searchArgs.query, results: data.results || [] };
+    } catch (error) {
+        return { error: `Deep web search failed for query "${searchArgs.query}": ${error instanceof Error ? error.message : String(error)}` };
+    }
+}
+
+// ============================================================================
 // PARALLEL SEARCH EXECUTION
 // ============================================================================
 

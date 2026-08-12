@@ -13,6 +13,7 @@ A remote Model Context Protocol (MCP) server that provides access to Jina Reader
 | `capture_screenshot_url` | Capture high-quality screenshots of web pages via [Reader API](https://jina.ai/reader) | Optional* |
 | `guess_datetime_url` | Analyze web pages for last update/publish datetime with confidence scores | No |
 | `search_web` | Search the entire web for current information and news via [Reader API](https://jina.ai/reader) | Yes |
+| `search_web_deep` | Search the web and return content-grounded, relevance-ranked snippets by reading and reranking actual page content (15-40s) via [Reader API](https://jina.ai/reader) | Yes |
 | `search_arxiv` | Search academic papers and preprints on arXiv repository via [Reader API](https://jina.ai/reader) | Yes |
 | `search_ssrn` | Search academic papers on SSRN (Social Science Research Network) via [Reader API](https://jina.ai/reader) | Yes |
 | `search_images` | Search for images across the web (similar to Google Images) via [Reader API](https://jina.ai/reader) | Yes |
@@ -95,7 +96,7 @@ args = [
 
 ## Tool Filtering before Registering
 
-Every MCP tool requires the LLM to pre-allocate tokens in its context window for the tool's name, description, and schema. For LLMs with limited context windows, registering all 21 tools can consume significant space before any actual work begins.
+Every MCP tool requires the LLM to pre-allocate tokens in its context window for the tool's name, description, and schema. For LLMs with limited context windows, registering all 22 tools can consume significant space before any actual work begins.
 
 By filtering tools server-side via query parameters on the endpoint URL (`/v1?...`), excluded tools are never registered with the MCP client. The client and LLM never see them, saving context window for what matters.
 
@@ -113,7 +114,7 @@ By filtering tools server-side via query parameters on the endpoint URL (`/v1?..
 
 | Tag | Tools |
 |-----|-------|
-| `search` | search_web, search_arxiv, search_ssrn, search_images, search_jina_blog, search_bibtex |
+| `search` | search_web, search_web_deep, search_arxiv, search_ssrn, search_images, search_jina_blog, search_bibtex |
 | `parallel` | parallel_search_web, parallel_search_arxiv, parallel_search_ssrn, parallel_read_url |
 | `read` | read_url, parallel_read_url, capture_screenshot_url |
 | `utility` | primer, show_api_key, expand_query, guess_datetime_url, extract_pdf |

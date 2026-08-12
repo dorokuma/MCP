@@ -4,12 +4,12 @@ import { registerJinaTools } from "./tools/jina-tools.js";
 import { stringify as yamlStringify } from "yaml";
 
 // Build-time constants (can be replaced by build tools)
-const SERVER_VERSION = "1.5.0";
+const SERVER_VERSION = "1.6.0";
 const SERVER_NAME = "jina-mcp";
 
 // Tool tags mapping for filtering
 const TOOL_TAGS: Record<string, string[]> = {
-	search: ["search_web", "search_arxiv", "search_ssrn", "search_images", "search_jina_blog", "search_bibtex"],
+	search: ["search_web", "search_web_deep", "search_arxiv", "search_ssrn", "search_images", "search_jina_blog", "search_bibtex"],
 	parallel: ["parallel_search_web", "parallel_search_arxiv", "parallel_search_ssrn", "parallel_read_url"],
 	read: ["read_url", "parallel_read_url", "capture_screenshot_url"],
 	utility: ["primer", "show_api_key", "expand_query", "guess_datetime_url", "extract_pdf"],
@@ -19,7 +19,7 @@ const TOOL_TAGS: Record<string, string[]> = {
 // All available tools
 const ALL_TOOLS = [
 	"primer", "show_api_key", "read_url", "capture_screenshot_url", "guess_datetime_url",
-	"search_web", "search_arxiv", "search_ssrn", "search_images", "search_jina_blog", "search_bibtex", "expand_query",
+	"search_web", "search_web_deep", "search_arxiv", "search_ssrn", "search_images", "search_jina_blog", "search_bibtex", "expand_query",
 	"parallel_search_web", "parallel_search_arxiv", "parallel_search_ssrn", "parallel_read_url",
 	"sort_by_relevance", "classify_text", "deduplicate_strings", "deduplicate_images", "extract_pdf"
 ];
@@ -97,6 +97,11 @@ Web Search (use when user wants to find something ONLINE, not local files):
 - "search the web for...", "google...", "look up online...", "find on the internet..."
 - "what's the latest news on...", "current events about...", "recent updates on..."
 - Any query needing real-time or up-to-date information from the internet
+
+Deep Web Search (use when user needs content-grounded answers, not just titles/descriptions):
+- "deep search for...", "find detailed information about...", "search and read pages about..."
+- Any question where the answer is likely inside a page, not just the headline
+- Prefer over search_web when high-quality, passage-level answers matter; slower (15-40s)
 
 URL/Webpage Reading (use when user provides a URL or link):
 - "read this URL: https://...", "what does this webpage say...", "summarize this link..."
