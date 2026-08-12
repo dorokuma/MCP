@@ -492,21 +492,20 @@ export async function executeWebDeepSearch(
     try {
         const num = Math.min(Math.max(searchArgs.num || 5, 1), 10);
         const readNum = Math.min(num + 3, 10);
-        const response = await fetch('https://svip.jina.ai/', {
-            method: 'POST',
+        const params = new URLSearchParams({
+            q: searchArgs.query,
+            meta: 'deep',
+            num: String(num),
+            read_num: String(readNum),
+            deep_timeout: '25000',
+        });
+        const response = await fetch(`https://svip.jina.ai/?${params.toString()}`, {
+            method: 'GET',
             signal: AbortSignal.timeout(DEEP_SEARCH_REQUEST_TIMEOUT_MS),
             headers: {
                 'Accept': 'application/json',
-                'Content-Type': 'application/json',
                 'Authorization': `Bearer ${bearerToken}`,
             },
-            body: JSON.stringify({
-                q: searchArgs.query,
-                meta: 'deep',
-                num,
-                read_num: readNum,
-                deep_timeout: 25000,
-            }),
         });
 
         if (!response.ok) {
