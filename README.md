@@ -230,7 +230,7 @@ Claude Code, Claude Desktop, and Cursor enforce a fixed 25k token limit on MCP t
 
 Items are kept whole in their original order while they fit. The first item that does not fit is cut to a prefix that does, and anything after it is dropped. A short `[jina-mcp] ...` note is appended saying what was truncated or omitted, so the model knows it is looking at a partial document rather than a complete one. At least one item always survives, even if that item alone is over budget.
 
-The server aims for ~85% of the limit rather than exactly 100%, because the client counts tokens with its own tokenizer and the cut itself is a proportional character estimate; targeting the limit exactly still overshoots it in practice.
+The server deliberately aims under the limit rather than exactly at it. It has to: the server counts tokens with cl100k while the client counts with its own tokenizer, the cut is a proportional character estimate, and the client measures the serialized JSON payload rather than the raw text. On top of the token budget the server therefore enforces a hard ceiling of 3 bytes per allowed token, which holds regardless of tokenizer for both ASCII prose (~3.6 bytes/token) and CJK (~3 bytes/token). A rejected response delivers nothing, so erring low is the cheaper mistake.
 
 Any client can set its own budget with `max_tokens` on the endpoint URL (for example `https://mcp.jina.ai/v1?max_tokens=50000`), and `max_tokens=0` disables truncation entirely. Clients with configurable limits, such as OpenAI Codex (`tool_output_token_limit`), are otherwise left alone.
 

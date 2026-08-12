@@ -90,11 +90,40 @@ const TRUNCATION_NOTICE_TOKENS = 64;
  *    number decides whether the response is rejected.
  *  - The cut itself is a proportional character ratio, which assumes uniform
  *    token density across the document. Prose, code blocks and tables differ.
- *
- * Observed: a 772k-char page trimmed to a 25,000-token target came back at
- * 99,743 chars and Claude Code still rejected it for exceeding 25k tokens.
+ *  - The client measures the *serialized* payload, not the text: JSON escaping
+ *    turned 84,743 characters of content into 89,917 characters on the wire.
  */
-const GUARDRAIL_SAFETY_FACTOR = 0.85;
+const GUARDRAIL_SAFETY_FACTOR = 0.9;
+
+/**
+ * Hard ceiling on emitted bytes, independent of any tokenizer.
+ *
+ * The token budget above relies on cl100k agreeing with the client's tokenizer,
+ * which it does not. This bound does not: a 25,000-token limit becomes 75,000
+ * bytes, which no realistic page content can tokenize to more than 25,000 tokens
+ * of. It holds for both ends of the density range - ASCII prose runs ~3.6
+ * bytes/token, and CJK is ~3 UTF-8 bytes per character at roughly one token per
+ * character.
+ *
+ * Calibrated against a real rejection: Project Gutenberg plain text measured
+ * 3.597 characters per client token, so a 25,000-token target that trusted
+ * cl100k alone (89,917 chars) was still refused. 75,000 bytes of the same text
+ * is ~20,850 client tokens.
+ */
+const MAX_BYTES_PER_TOKEN = 3;
+
+/** Slack for the JSON envelope, field names and escape sequences */
+const SERIALIZATION_OVERHEAD_BYTES = 2048;
+
+/** Longest prefix of `text` that fits in `maxBytes` when UTF-8 encoded */
+function sliceToByteBudget(text: string, approxChars: number, maxBytes: number): string {
+    let candidate = text.slice(0, Math.max(0, approxChars));
+    // The char estimate can overshoot on multi-byte content; shrink until it fits
+    while (candidate.length > 0 && Buffer.byteLength(candidate, 'utf8') > maxBytes) {
+        candidate = candidate.slice(0, Math.floor(candidate.length * 0.95));
+    }
+    return candidate;
+}
 
 /**
  * Truncate text content items so the response fits the client's budget.
@@ -141,9 +170,14 @@ async function truncateContentItems(
         return contentItems;
     }
 
-    const budget = Math.floor(maxTokens * GUARDRAIL_SAFETY_FACTOR) - TRUNCATION_NOTICE_TOKENS;
+    // Two independent budgets: tokens (accurate when cl100k agrees with the
+    // client) and bytes (tokenizer-independent). An item must satisfy both.
+    const tokenBudget = Math.floor(maxTokens * GUARDRAIL_SAFETY_FACTOR) - TRUNCATION_NOTICE_TOKENS;
+    const byteBudget = maxTokens * MAX_BYTES_PER_TOKEN - SERIALIZATION_OVERHEAD_BYTES;
+
     const kept: ContentItem[] = [];
-    let used = 0;
+    let usedTokens = 0;
+    let usedBytes = 0;
     let droppedItems = 0;
     let truncated = false;
 
@@ -154,24 +188,32 @@ async function truncateContentItems(
         }
 
         const itemTokens = tokenCounts.get(item) ?? 0;
+        const itemBytes = Buffer.byteLength(item.text, 'utf8');
 
-        if (used + itemTokens <= budget) {
+        if (usedTokens + itemTokens <= tokenBudget && usedBytes + itemBytes <= byteBudget) {
             kept.push(item);
-            used += itemTokens;
+            usedTokens += itemTokens;
+            usedBytes += itemBytes;
             continue;
         }
 
         // First item that does not fit: spend whatever budget is left on a prefix
         // of it, then drop the rest. This is what guarantees the caller always
         // gets *some* content back, even when item one alone blows the budget.
-        const remaining = budget - used;
-        if (!truncated && remaining > 0 && itemTokens > 0) {
-            // Proportional character cut - approximate, but token density is
-            // roughly uniform within a single document
-            const keepChars = Math.floor(item.text.length * (remaining / itemTokens));
-            if (keepChars > 0) {
-                kept.push({ type: 'text', text: item.text.slice(0, keepChars) });
-                used = budget;
+        const remainingTokens = tokenBudget - usedTokens;
+        const remainingBytes = byteBudget - usedBytes;
+
+        if (!truncated && remainingTokens > 0 && remainingBytes > 0 && itemTokens > 0) {
+            // Proportional character cut under whichever budget binds first -
+            // approximate, but token density is roughly uniform within a document
+            const charsByTokens = Math.floor(item.text.length * (remainingTokens / itemTokens));
+            const charsByBytes = Math.floor(item.text.length * (remainingBytes / itemBytes));
+            const text = sliceToByteBudget(item.text, Math.min(charsByTokens, charsByBytes), remainingBytes);
+
+            if (text.length > 0) {
+                kept.push({ type: 'text', text });
+                usedTokens = tokenBudget;
+                usedBytes = byteBudget;
                 truncated = true;
                 continue;
             }
