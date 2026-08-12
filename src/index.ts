@@ -4,7 +4,7 @@ import { registerJinaTools } from "./tools/jina-tools.js";
 import { stringify as yamlStringify } from "yaml";
 
 // Build-time constants (can be replaced by build tools)
-const SERVER_VERSION = "1.6.0";
+const SERVER_VERSION = "1.7.0";
 const SERVER_NAME = "jina-mcp";
 
 // Tool tags mapping for filtering
@@ -98,10 +98,12 @@ Web Search (use when user wants to find something ONLINE, not local files):
 - "what's the latest news on...", "current events about...", "recent updates on..."
 - Any query needing real-time or up-to-date information from the internet
 
-Deep Web Search (use when user needs content-grounded answers, not just titles/descriptions):
+Deep Web Search (use when the answer lives in page text, not in titles/descriptions):
 - "deep search for...", "find detailed information about...", "search and read pages about..."
 - Any question where the answer is likely inside a page, not just the headline
-- Prefer over search_web when high-quality, passage-level answers matter; slower (15-40s)
+- Returns a paragraph-length passage read from each page instead of a search-engine
+  snippet fragment. Prefer over search_web when passage-level answers matter; slower
+  (typically 2-20s)
 
 URL/Webpage Reading (use when user provides a URL or link):
 - "read this URL: https://...", "what does this webpage say...", "summarize this link..."

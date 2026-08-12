@@ -358,12 +358,13 @@ export function registerJinaTools(server: McpServer, getProps: () => any, enable
 	if (isToolEnabled("search_web_deep")) {
 		server.tool(
 			"search_web_deep",
-			"Search the web and return content-grounded, relevance-ranked snippets. Unlike regular web search which relies on SERP snippets, deep search reads the actual content of each result page, extracts the most relevant passage for your query, and re-ranks all results by semantic relevance. Best for questions where the answer is buried in page content rather than titles or descriptions. Slower than search_web (15-40s) but returns substantially higher-quality, answer-ready snippets.",
+			"Search the web, then read the result pages and return the passage from each that best answers the query, re-ranked by relevance. Regular search_web returns only the search engine's snippet, which is often a page fragment that does not answer the question; this reads the page itself and extracts a paragraph-length passage (~100 words). Best for questions whose answer is buried in page content rather than in titles or descriptions. Slower than search_web (typically 2-20s). Each result carries a snippet_source field: 'content' when the snippet came from the page body, 'serp' when the search engine's own snippet scored higher and was kept instead.",
 			{
 				query: z.string().describe("Search terms or question to answer (e.g., 'how does TCP slow start work', 'what causes memory fragmentation')"),
 				num: z.number().int().min(1).max(10).default(5).describe("Number of results to return (1-10). Each result is drawn from a fully-read page; higher numbers take longer."),
+				snippet_source: z.enum(["auto", "content"]).default("auto").describe("'auto' (recommended) lets the extracted passage compete with the search engine's snippet and keeps whichever is more relevant, so some results may be short SERP snippets. 'content' returns only extracted page passages, omitting pages that could not be read — use it when you need full passages for grounding and can accept fewer than num results (occasionally zero)."),
 			},
-			async ({ query, num }: { query: string; num: number }) => {
+			async ({ query, num, snippet_source }: { query: string; num: number; snippet_source: 'auto' | 'content' }) => {
 				try {
 					const props = getProps();
 
@@ -373,9 +374,24 @@ export function registerJinaTools(server: McpServer, getProps: () => any, enable
 					}
 
 					const searchResult = await executeWebDeepSearch(
-						{ query, num } as SearchWebDeepArgs,
+						{ query, num, snippet_source } as SearchWebDeepArgs,
 						props.bearerToken as string
 					);
+
+					// snippet_source=content omits pages it could not read rather than
+					// padding from the SERP, so an empty result set is a legitimate
+					// outcome. Say why instead of returning a bare empty content array,
+					// which reads as a malfunction and tells the caller nothing.
+					if (!('error' in searchResult) && searchResult.results.length === 0) {
+						return {
+							content: [{
+								type: "text" as const,
+								text: snippet_source === 'content'
+									? `No content-grounded results for "${query}": no result page could be read and extracted in time. Retry with snippet_source='auto' to allow search-engine snippets, or use search_web.`
+									: `No results for "${query}".`,
+							}],
+						};
+					}
 
 					return {
 						content: formatSingleSearchResultToContentItems(searchResult),
