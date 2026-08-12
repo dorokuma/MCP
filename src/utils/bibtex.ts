@@ -62,8 +62,13 @@ function decodeHtmlEntities(text: string): string {
 // Generate a citation key from the first author's surname, year and first title
 // word. Keying on the title's first word alone collided constantly - every
 // "A Survey of ..." paper from the same year produced the same key.
+const KEY_STOPWORDS = new Set(['a', 'an', 'the', 'on', 'of', 'in', 'for', 'to', 'and', 'is', 'are']);
+
 function generateKey(title: string, year?: number, authors: string[] = []): string {
-	const titleWord = title.toLowerCase().split(/\s+/)[0]?.replace(/[^a-z]/g, '') || 'unknown';
+	// Skip leading articles so "A Survey of Large Language Models" keys on
+	// "survey" rather than "a", which is both more useful and far less collidey
+	const words = title.toLowerCase().split(/\s+/).map((w) => w.replace(/[^a-z]/g, '')).filter(Boolean);
+	const titleWord = words.find((w) => !KEY_STOPWORDS.has(w)) || words[0] || 'unknown';
 	const surname = authors[0]?.trim().split(/\s+/).pop()?.toLowerCase().replace(/[^a-z]/g, '') || '';
 	return surname ? `${surname}${year || ''}${titleWord}` : `${titleWord}${year || ''}`;
 }

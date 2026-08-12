@@ -82,6 +82,21 @@ async function countTokens(content: string, bearerToken: string, apiBaseUrl: str
 const TRUNCATION_NOTICE_TOKENS = 64;
 
 /**
+ * Aim below the client's limit rather than exactly at it.
+ *
+ * Two independent sources of error make an exact target unsafe:
+ *  - /v1/segment tokenizes with cl100k, but the client counts with its *own*
+ *    tokenizer. The same text yields different totals, and only the client's
+ *    number decides whether the response is rejected.
+ *  - The cut itself is a proportional character ratio, which assumes uniform
+ *    token density across the document. Prose, code blocks and tables differ.
+ *
+ * Observed: a 772k-char page trimmed to a 25,000-token target came back at
+ * 99,743 chars and Claude Code still rejected it for exceeding 25k tokens.
+ */
+const GUARDRAIL_SAFETY_FACTOR = 0.85;
+
+/**
  * Truncate text content items so the response fits the client's budget.
  *
  * - Token counts for every item are resolved concurrently. They used to be
@@ -126,7 +141,7 @@ async function truncateContentItems(
         return contentItems;
     }
 
-    const budget = maxTokens - TRUNCATION_NOTICE_TOKENS;
+    const budget = Math.floor(maxTokens * GUARDRAIL_SAFETY_FACTOR) - TRUNCATION_NOTICE_TOKENS;
     const kept: ContentItem[] = [];
     let used = 0;
     let droppedItems = 0;

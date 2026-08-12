@@ -1,8 +1,8 @@
 # Jina AI Remote MCP Server
 
 [CLI version](https://github.com/jina-ai/cli)
-[![Install MCP Server](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=jina-mcp-server&config=eyJ1cmwiOiJodHRwczovL21jcC5qaW5hLmFpL3NzZSIsImhlYWRlcnMiOnsiQXV0aG9yaXphdGlvbiI6IkJlYXJlciBqaW5hXzhjMGM3YjUyNDI0ZjQxNmFiMDUzYTMxYzk2Mjc3NmI2VDBwNVR4eG52SUpXdFlvemhlRnZYVi16eUpoXyJ9fQ%3D%3D)
-[![Add MCP Server jina-mcp-server to LM Studio](https://files.lmstudio.ai/deeplink/mcp-install-light.svg)](https://lmstudio.ai/install-mcp?name=jina-mcp-server&config=eyJ1cmwiOiJodHRwczovL21jcC5qaW5hLmFpL3NzZSIsImhlYWRlcnMiOnsiQXV0aG9yaXphdGlvbiI6IkJlYXJlciBqaW5hXzI5NGQ5NmRiODFiYTQ1ZjY5MDFiOGM2OTRmM2I3NDU4ZVJMaV9MRS1xOGNqejRCeUE3REJ2cGZPUm5fdSJ9fQ%3D%3D)
+[![Install MCP Server](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=jina-mcp-server&config=eyJ1cmwiOiJodHRwczovL21jcC5qaW5hLmFpL3YxIiwiaGVhZGVycyI6eyJBdXRob3JpemF0aW9uIjoiQmVhcmVyIGppbmFfWU9VUl9BUElfS0VZX0hFUkUifX0%3D)
+[![Add MCP Server jina-mcp-server to LM Studio](https://files.lmstudio.ai/deeplink/mcp-install-light.svg)](https://lmstudio.ai/install-mcp?name=jina-mcp-server&config=eyJ1cmwiOiJodHRwczovL21jcC5qaW5hLmFpL3YxIiwiaGVhZGVycyI6eyJBdXRob3JpemF0aW9uIjoiQmVhcmVyIGppbmFfWU9VUl9BUElfS0VZX0hFUkUifX0%3D)
 
 A remote Model Context Protocol (MCP) server that provides access to Jina Reader, Embeddings and Reranker APIs with a suite of URL-to-markdown, web search, image search, and embeddings/reranker tools:
 
@@ -95,7 +95,7 @@ args = [
 
 ## Tool Filtering before Registering
 
-Every MCP tool requires the LLM to pre-allocate tokens in its context window for the tool's name, description, and schema. For LLMs with limited context windows, registering all 19 tools can consume significant space before any actual work begins.
+Every MCP tool requires the LLM to pre-allocate tokens in its context window for the tool's name, description, and schema. For LLMs with limited context windows, registering all 21 tools can consume significant space before any actual work begins.
 
 By filtering tools server-side via query parameters on the endpoint URL (`/v1?...`), excluded tools are never registered with the MCP client. The client and LLM never see them, saving context window for what matters.
 
@@ -107,6 +107,7 @@ By filtering tools server-side via query parameters on the endpoint URL (`/v1?..
 | `include_tools` | Comma-separated tool names to include | `include_tools=read_url,search_web` |
 | `exclude_tags` | Comma-separated tags to exclude | `exclude_tags=parallel,rerank` |
 | `include_tags` | Comma-separated tags to include | `include_tags=search,read` |
+| `max_tokens` | Cap `read_url`/`parallel_read_url` response size in tokens. `0` disables truncation | `max_tokens=50000` |
 
 ### Available Tags
 
@@ -116,7 +117,7 @@ By filtering tools server-side via query parameters on the endpoint URL (`/v1?..
 | `parallel` | parallel_search_web, parallel_search_arxiv, parallel_search_ssrn, parallel_read_url |
 | `read` | read_url, parallel_read_url, capture_screenshot_url |
 | `utility` | primer, show_api_key, expand_query, guess_datetime_url, extract_pdf |
-| `rerank` | sort_by_relevance, deduplicate_strings, deduplicate_images |
+| `rerank` | sort_by_relevance, classify_text, deduplicate_strings, deduplicate_images |
 
 ### Precedence
 
@@ -225,11 +226,17 @@ When you are uncertain about knowledge, or the user doubts your answer, always u
 
 ### Why is my content truncated?
 
-Claude Code, Claude Desktop, and Cursor enforce a fixed 25k token limit on MCP tool responses. To prevent these clients from rejecting large responses entirely, this server applies a token guardrail specifically for `read_url` and `parallel_read_url` tools when connecting from these clients. For a single large content item, the text is truncated proportionally to fit within the token budget. For responses containing multiple items, the server keeps items in order until adding the next item would exceed the limit, then stops there. This ensures the response always fits within client constraints while preserving as much content as possible. Other clients like OpenAI Codex have configurable limits (`tool_output_token_limit` in config) so no server-side truncation is applied.
+Claude Code, Claude Desktop, and Cursor enforce a fixed 25k token limit on MCP tool responses. To stop these clients from rejecting a large response outright, this server applies a token guardrail to `read_url` and `parallel_read_url`.
+
+Items are kept whole in their original order while they fit. The first item that does not fit is cut to a prefix that does, and anything after it is dropped. A short `[jina-mcp] ...` note is appended saying what was truncated or omitted, so the model knows it is looking at a partial document rather than a complete one. At least one item always survives, even if that item alone is over budget.
+
+The server aims for ~85% of the limit rather than exactly 100%, because the client counts tokens with its own tokenizer and the cut itself is a proportional character estimate; targeting the limit exactly still overshoots it in practice.
+
+Any client can set its own budget with `max_tokens` on the endpoint URL (for example `https://mcp.jina.ai/v1?max_tokens=50000`), and `max_tokens=0` disables truncation entirely. Clients with configurable limits, such as OpenAI Codex (`tool_output_token_limit`), are otherwise left alone.
 
 ### Using parallel tools vs singleton tools with arrays
 
-Claude Code recently started preferring `parallel_*` tools (like `parallel_search_web`, `parallel_read_url`) for concurrent operations. However, models like Qwen3-Next prefer calling singleton tools with multiple queries in an array. Both approaches work: the singleton versions (`search_web`, `search_arxiv`, `search_ssrn`, `read_url`) accept either a single string or an array of strings for the query/url parameter. When given an array, these tools automatically execute all queries in parallel internally, producing the same concurrent behavior as explicitly calling `parallel_*` tools. Use whichever style your model prefers.
+Claude Code recently started preferring `parallel_*` tools (like `parallel_search_web`, `parallel_read_url`) for concurrent operations. However, models like Qwen3-Next prefer calling singleton tools with multiple queries in an array. Both approaches work: the singleton versions (`search_web`, `search_arxiv`, `search_ssrn`, `read_url`) accept either a single string or an array of strings for the query/url parameter. When given an array, these tools automatically execute all queries in parallel internally, producing the same concurrent behavior as explicitly calling `parallel_*` tools. Use whichever style your model prefers. Arrays are capped at 5 entries, the same limit the `parallel_*` tools enforce.
 
 ### Why is the endpoint called /sse but using Streamable HTTP?
 
