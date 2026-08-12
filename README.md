@@ -275,6 +275,43 @@ If you're using [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) as a lo
 
 This approach filters tools at the proxy level before they reach the MCP client. However, server-side filtering via query parameters (see [Tool Filtering](#tool-filtering-before-registering)) is more efficient as it reduces token usage from the source.
 
+### What is the difference between `search_web` and `search_web_deep`?
+
+`search_web` returns what the search engine returns: a snippet the engine picked, around 20 words, often a fragment that contains the keywords without answering the question. `search_web_deep` additionally fetches each result page through the [Reader API](https://jina.ai/reader), splits the body into ~100-word passages at sentence boundaries, and scores every passage from every page against the query in a single listwise [Reranker API](https://jina.ai/reranker) call (`jina-reranker-v3.5`). Because all passages share one call, a passage from any page can outrank a passage from any other.
+
+The `snippet_source` parameter decides what may come back. Under `auto` (the default) each page's own engine snippet is entered into that same call as one more candidate, so a result comes from whichever scored higher; the `snippet_source` field on each result tells you which. Under `content` the engine snippet is never entered as a candidate, pages that could not be read are dropped rather than padded in from the SERP, and the response may therefore hold fewer than `num` results.
+
+Live output for one query in each language, top 5 per mode. Snippets are abridged; `snippet_source` and `rerank_score` are shown where the tool reports them. Latencies are single runs and dominated by how fast the result pages happen to load, so do not read a ranking into them.
+
+**English — `what is the latest model from jina ai`** (latency: 1212ms / 3367ms / 2399ms)
+
+| # | `search_web` | `search_web_deep`<br>`snippet_source=auto` | `search_web_deep`<br>`snippet_source=content` |
+|---|---|---|---|
+| 1 | **jina.ai/models**<br>We've been moving the needle in search models since day one. Take a look at our model evolution … | **www.elastic.co/search-labs/blog/on-prem-ai-j…**<br>`serp` 0.8199 · All 28 Jina AI models available, including the latest jina-embeddings-v5-omni multimodal embeddi… | **jina.ai**<br>`content` 0.6851 · Tech blog Bootstrapping Audio Embeddings from Multimodal LLMs March 11, 2026 • 7 minutes read Ou… |
+| 2 | **jina.ai**<br>Jina models natively inside Elasticsearch. v3.5: An Efficient Listwise Reranker with Hybrid Atte… | **jina.ai/embeddings**<br>`serp` 0.7866 · jina-embeddings-v4 is our latest universal multimodal model (3.8B parameters) supporting text an… | **jina.ai/embeddings**<br>`content` 0.6834 · arXiv July 20, 2026 jina-reranker-v3.5: An Efficient Listwise Reranker with Hybrid Attention and… |
+| 3 | **huggingface.co/jinaai**<br>Jina AI: Embeddings, Rerankers and Small Language Models. Two sizes, four task variants each. Re… | **huggingface.co/jinaai**<br>`serp` 0.6868 · Jina AI: Embeddings, Rerankers and Small Language Models for Better Search jina-vlm (2025-12-04)… | **huggingface.co/jinaai**<br>`content` 0.6298 · Recent Activity florian-hoenickeupdated a model about 10 hours ago jinaai/jina-embeddings-v5-omn… |
+| 4 | **jina.ai/embeddings**<br>jina-embeddings-v4 is our latest universal multimodal model (3.8B parameters) supporting text an… | **jina.ai**<br>`content` 0.6851 · Tech blog Bootstrapping Audio Embeddings from Multimodal LLMs March 11, 2026 • 7 minutes read Ou… | **cloud.google.com/blog/products/application-d…**<br>`content` 0.5684 · Jina Reader isn't just another scraper; it takes a different approach to how AI systems consume … |
+| 5 | **www.elastic.co/search-labs/blog/on-prem-ai-j…**<br>All 28 Jina AI models available, including the latest jina-embeddings-v5-omni multimodal embeddi… | **newrelic.com/instant-observability/jina-ai**<br>`content` 0.3775 · Early issue detection: Detect and address issues early to prevent them from affecting model perf… | **jina.ai/models**<br>`content` 0.5064 · warning calendar\month 2023-06-17 The first version of the Jina Embedding model, the OG. notes 5… |
+
+**Chinese — `jina ai 最新的模型是什么`** (latency: 2168ms / 3404ms / 1889ms)
+
+| # | `search_web` | `search_web_deep`<br>`snippet_source=auto` | `search_web_deep`<br>`snippet_source=content` |
+|---|---|---|---|
+| 1 | **jina.ai/zh-TW/about-us**<br>Jina AI 由肖涵博士於2020年創建,是一家領先的搜索AI 公司。我們專注開發向量模型、重排器、Reader和小型語言模型,幫助企業和開發者構建強大的搜索 | **www.ithome.com.tw/news/159507**<br>`content` 0.8397 · Jina AI最新第二代文字嵌入模型jina-embeddings-v2，已可處理多達8,192個token，在多項自然語言處理任務中，表現已超越OpenAI同級模型text-embeddin… | **www.ithome.com.tw/news/159507**<br>`content` 0.8397 · Jina AI最新第二代文字嵌入模型jina-embeddings-v2，已可處理多達8,192個token，在多項自然語言處理任務中，表現已超越OpenAI同級模型text-embeddin… |
+| 2 | **jina.ai/zh-TW/news/jina-reader-for-search-gr…**<br>Grounding 技術對GenAI 應用程式來說至關重要。我們全新的https://s.jina.ai/ 讓LLM 能夠存取來自網路的最新知識，實現搜尋grounding，讓回應更值得 | **jina.ai/zh-CN/embeddings**<br>`content` 0.752 · 两者都与 v5-text 完全兼容——无需重新索引。 v5-text：最新最先进的小型多语言向量模型 jina-embeddings-v5-text 以两种高效尺寸（677M 小型模型和 23… | **jina.ai/zh-CN/embeddings**<br>`content` 0.752 · 两者都与 v5-text 完全兼容——无需重新索引。 v5-text：最新最先进的小型多语言向量模型 jina-embeddings-v5-text 以两种高效尺寸（677M 小型模型和 23… |
+| 3 | **www.elastic.co/cn/jina-search-models**<br>什么是Jina 搜索模型？ Jina 模型是开源的、前沿的检索AI 模型。它们包括用于向量的嵌入模型、用于提高精确度的重排序器，以及用于从URL 和文档中提取和构建内容的读取器。 | **www.elastic.co/cn/jina-search-models**<br>`content` 0.7082 · 您可以从 semantic_text 开始，或访问各模型子页面，查看代码示例、API 参考和教程。 目前可用的 Jina 模型有哪些？ 我们最新的 v5-text（nano/small）支持 … | **www.elastic.co/cn/jina-search-models**<br>`content` 0.7082 · 您可以从 semantic_text 开始，或访问各模型子页面，查看代码示例、API 参考和教程。 目前可用的 Jina 模型有哪些？ 我们最新的 v5-text（nano/small）支持 … |
+| 4 | **milvus.io/docs/zh-hant/embed-with-jina.md**<br>Jina AI. Jina AI 的嵌入模型是高性能的文字嵌入模型，可以將文字輸入轉換為數字表示，捕捉文字的語義。這些模型在密集檢索、語義文字相似性和多語言理解等應用中表現 | **milvus.io/docs/zh-hant/embed-with-jina.md**<br>`content` 0.6834 · Jina AI’s embedding models are high-performance text embedding models that can translate textual… | **jina.ai/zh-TW/about-us**<br>`content` 0.5722 · 我們專注開發向量模型、重排器、Reader和小型語言模型，幫助企業和開發者構建強大的搜索應用程序，提供高相關、紮實、多模態和多語言的搜索結果。 2025年10月9日，Jina AI 被 Ela… |
+| 5 | **jina.ai/zh-CN/embeddings**<br>v5-omni：一个向量，涵盖所有模态 文本、图像、音频、视频——共享同一个向量空间，两种尺寸。v5-omni-small (16亿) 是参数量为20 亿时性能最佳的开放权重全向模型。v5- | **jina.ai/zh-TW/about-us**<br>`serp` 0.5889 · Jina AI 由肖涵博士於2020年創建,是一家領先的搜索AI 公司。我們專注開發向量模型、重排器、Reader和小型語言模型,幫助企業和開發者構建強大的 | **jina.ai/zh-TW/news/jina-reader-for-search-gr…**<br>`content` 0.4827 · 因為阻止企業向數百萬用戶部署 LLMs 的主要障礙是信任度：答案是真實的，還是僅僅是模型的幻覺（hallucination）？ 這是整個產業的問題，而 Jina AI 一直在努力解決。 今天，… |
+
+Three things worth reading off this comparison:
+
+**The engine's snippet is sometimes the better answer.** In the English run the top three `auto` results are all `serp`, and the first of them — "All 28 Jina AI models available, including the latest jina-embeddings-v5-omni multimodal embedding models and jina-reranker-v3" — answers the question more directly than any passage extracted from a page body. Forcing `content` pushes those out and promotes navigation text from the jina.ai homepage instead ("Tech blog Bootstrapping Audio Embeddings from Multimodal LLMs ... Meet our team at EMNLP"). That is why `auto` is the default: reach for `content` when something downstream needs full passages, not on the assumption that it ranks better.
+
+**The reranker scores relevance, not freshness.** Both Chinese deep runs put a 2023 article about `jina-embeddings-v2` at rank 1, with the highest score anywhere in this comparison (0.8397), for a query that asks which model is *latest*. The English `auto` run has the same failure at rank 2, an engine snippet still describing `jina-embeddings-v4` as "our latest". Nothing in this pipeline reads dates. For recency-sensitive questions, bound the window with `tbs` on `search_web`, or check each result's `date` field before trusting the order.
+
+**Snippets get longer, but not uniformly ~100 words.** Median snippet size goes from 22 words with `search_web` to 106 with `content` in English, and from 58 to 92 CJK characters in Chinese. Pages that are mostly navigation or listings carry little sentence punctuation to split on, so they yield single oversized passages — 272 and 253 words for the first two English `content` results.
+
+
 ## Developer Guide
 
 ### Local Development
