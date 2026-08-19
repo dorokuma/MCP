@@ -282,7 +282,7 @@ By default `read_url` returns the whole page, and the model pays for every token
 | Parameter | Default | Effect |
 |---|---|---|
 | `question` | *(unset)* | Unset returns the full page, exactly as before. Set, it returns ranked passages instead of `content`. |
-| `tokens` | `100` | Target passage size, counted in words (characters for CJK). Passages only split at sentence boundaries, so this is a target, not a hard cut. Larger keeps more surrounding context, smaller pinpoints the answer. |
+| `chunk_size` | `100` | Target passage size, counted in words (characters for CJK). **Not a token count** — 100 words is roughly 130-150 tokens of English. Passages only split at sentence boundaries, so this is a target, not a hard cut. Larger keeps more surrounding context, smaller pinpoints the answer. |
 | `topk` | `1` | Number of passages returned, best first. |
 
 All three are optional and `question` gates the other two, so existing calls are byte-for-byte unchanged.

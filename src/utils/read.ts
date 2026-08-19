@@ -6,7 +6,7 @@ import { withDeadline } from "./timeout.js";
 const READ_REQUEST_TIMEOUT_MS = 30000;
 
 /** Passage size for question-grounded reads, in words (CJK: characters). */
-export const DEFAULT_SNIPPET_TOKENS = 100;
+export const DEFAULT_SNIPPET_CHUNK_SIZE = 100;
 /** Passages returned for question-grounded reads. */
 export const DEFAULT_SNIPPET_TOPK = 1;
 
@@ -25,8 +25,16 @@ export interface ReadUrlConfig {
      * exactly as before.
      */
     question?: string;
-    /** Passage size for question-grounded reads, in words (CJK: characters). Default 100. */
-    tokens?: number;
+    /**
+     * Target passage size for question-grounded reads, in words (CJK:
+     * characters). Default 100.
+     *
+     * Named for what the server measures. It is not a token count: passages are
+     * split at sentence boundaries and sized by `textSize`, which counts CJK
+     * characters plus whitespace-delimited words. 100 words is roughly 130-150
+     * tokens of English.
+     */
+    chunk_size?: number;
     /** Number of passages to keep for question-grounded reads. Default 1. */
     topk?: number;
 }
@@ -88,10 +96,7 @@ async function readWithQuestion(
             q: question,
             url: normalizedUrl,
             topk: urlConfig.topk ?? DEFAULT_SNIPPET_TOPK,
-            // The MCP surface calls this `tokens`; server-side the unit is words
-            // (CJK: characters), which is what its sentence-boundary chunker
-            // actually measures.
-            chunk_size: urlConfig.tokens ?? DEFAULT_SNIPPET_TOKENS,
+            chunk_size: urlConfig.chunk_size ?? DEFAULT_SNIPPET_CHUNK_SIZE,
         }),
     });
 
