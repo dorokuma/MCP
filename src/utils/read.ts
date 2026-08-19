@@ -60,12 +60,22 @@ export type ReadUrlResponse = ReadUrlResult | ReadUrlError;
  * furniture before splitting, which is the difference between returning a bare
  * `## Heading` and returning the paragraph under it. Doing it server-side also
  * keeps the reranker call off the Worker's CPU budget.
+ *
+ * Only ever called with BOTH a url and a non-empty question. svip's read path
+ * is keyed on that pair: a url with no `q` there is a search for the literal
+ * string, not a read, so forwarding a question-less read would silently turn it
+ * into a nonsense search. Plain reads must stay on r.jina.ai. The caller
+ * enforces this and the guard below repeats it, because the failure is silent
+ * and wrong rather than loud.
  */
 async function readWithQuestion(
     normalizedUrl: string,
+    question: string,
     urlConfig: ReadUrlConfig,
     bearerToken?: string
 ): Promise<{ snippets: string[]; title?: string; } | null> {
+    if (!normalizedUrl || !question) return null;
+
     const response = await fetch('https://svip.jina.ai/', {
         method: 'POST',
         signal: AbortSignal.timeout(READ_REQUEST_TIMEOUT_MS),
@@ -75,7 +85,7 @@ async function readWithQuestion(
             ...(bearerToken ? { 'Authorization': `Bearer ${bearerToken}` } : {}),
         },
         body: JSON.stringify({
-            q: urlConfig.question,
+            q: question,
             url: normalizedUrl,
             topk: urlConfig.topk ?? DEFAULT_SNIPPET_TOPK,
             // The MCP surface calls this `tokens`; server-side the unit is words
@@ -135,13 +145,18 @@ export async function readUrlFromConfig(
             headers['X-Retain-Images'] = 'none';
         }
 
-        // With a question, the passage extraction runs concurrently with the
+        // svip is only involved when there is BOTH a url and a question. Without
+        // a question this is an ordinary read and must go to r.jina.ai alone:
+        // svip would treat a bare url as a search query. A question of only
+        // whitespace is no question at all, hence the trim before the check.
+        const question = urlConfig.question?.trim() || undefined;
+        const useSvip = Boolean(normalizedUrl && question);
+
+        // When both are present the passage extraction runs concurrently with the
         // plain read. The read is not wasted work: it is the fallback body if
         // extraction comes back empty, and it is what supplies links/images,
         // which the passage endpoint does not return. Sequencing them would add a
         // full round-trip to every question-grounded read for no benefit.
-        const question = urlConfig.question?.trim();
-
         const [response, snippetResult] = await Promise.all([
             fetch('https://r.jina.ai/', {
                 method: 'POST',
@@ -149,9 +164,9 @@ export async function readUrlFromConfig(
                 headers,
                 body: JSON.stringify({ url: normalizedUrl }),
             }),
-            question
+            useSvip
                 // A failure here must not fail the read; it degrades to full content.
-                ? readWithQuestion(normalizedUrl, urlConfig, bearerToken).catch(() => null)
+                ? readWithQuestion(normalizedUrl, question as string, urlConfig, bearerToken).catch(() => null)
                 : Promise.resolve(null),
         ]);
 
