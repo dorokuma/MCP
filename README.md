@@ -275,6 +275,35 @@ If you're using [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) as a lo
 
 This approach filters tools at the proxy level before they reach the MCP client. However, server-side filtering via query parameters (see [Tool Filtering](#tool-filtering-before-registering)) is more efficient as it reduces token usage from the source.
 
+### Reading a page with a question in mind
+
+By default `read_url` returns the whole page, and the model pays for every token of it to answer one question. Pass `question` and the page is instead split into passages and scored with [Reranker](https://jina.ai/reranker) v3.5, and only the top-ranked passages come back — literally the same pipeline `search_web_deep` runs on its result pages, now available on a URL you already have.
+
+| Parameter | Default | Effect |
+|---|---|---|
+| `question` | *(unset)* | Unset returns the full page, exactly as before. Set, it returns ranked passages instead of `content`. |
+| `tokens` | `100` | Target passage size, counted in words (characters for CJK). Passages only split at sentence boundaries, so this is a target, not a hard cut. Larger keeps more surrounding context, smaller pinpoints the answer. |
+| `topk` | `1` | Number of passages returned, best first. |
+
+All three are optional and `question` gates the other two, so existing calls are byte-for-byte unchanged.
+
+```jsonc
+// full page: 13,713 bytes, 233 ms
+{ "url": "https://jina.ai/news/what-late-chunking-really-is-and-what-its-not-part-ii/" }
+
+// one passage: 756 bytes (5.5%), 569 ms
+{ "url": "https://jina.ai/news/what-late-chunking-really-is-and-what-its-not-part-ii/",
+  "question": "Which embedding models support late chunking?", "topk": 2 }
+```
+
+A question-grounded response carries `question`, `snippets` and `snippet_source: content`, and omits `content`. When extraction cannot run — an empty page, an unreadable one, or no API key to rank with — the full body is returned with `snippet_source: full_content` and a `note` saying so, rather than a prefix masquerading as a ranked answer.
+
+Three things worth knowing before tuning:
+
+- **The score doubles as a confidence signal.** Asking a page a question it does not answer scores an order of magnitude lower than a genuine hit (measured: 0.02 against 0.51–0.81). A low top score means "this page does not say", not "ranking failed".
+- **Code blocks and tables are stripped before ranking.** The chunker removes them along with nav furniture, which is what stops boilerplate from winning on lexical overlap. The trade-off is that install commands and spec tables are not eligible passages, so *"how do I install X"* is a weak fit for this parameter.
+- **Latency is roughly double a plain read**, since the passage extraction runs alongside the fetch and adds a rerank call. `parallel_read_url` raises its own timeout floor to 60s when any entry has a `question`.
+
 ### What is the difference between `search_web` and `search_web_deep`?
 
 `search_web` returns the snippet the search engine picked — around 20 words, often a keyword-bearing fragment that never answers the question. `search_web_deep` also reads each page via [Reader](https://jina.ai/reader), splits it into ~100-word passages at sentence boundaries, and scores every passage from every page in one listwise [Reranker](https://jina.ai/reranker) call, so any page's passage can outrank any other's. `snippet_source=auto` (the default) enters each page's engine snippet as one more candidate and the `snippet_source` field on each result says which won; `content` never enters it and omits pages it could not read, so it may return fewer than `num`.

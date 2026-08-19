@@ -219,15 +219,22 @@ export function registerJinaTools(server: McpServer, getProps: () => any, enable
 	if (isToolEnabled("read_url")) {
 		server.tool(
 			"read_url",
-			"Extract and convert web page content to clean, readable markdown format. Perfect for reading articles, documentation, blog posts, or any web content. Use this when you need to analyze text content from websites, bypass paywalls, or get structured data.",
+			"Extract and convert web page content to clean, readable markdown format. Perfect for reading articles, documentation, blog posts, or any web content. Use this when you need to analyze text content from websites, bypass paywalls, or get structured data. Pass `question` to read the page with a specific question in mind: the body is split into passages and only the best-matching ones are returned, which is far cheaper than pulling a whole page into context.",
 			{
 				url: z.union([z.string().url(), z.array(z.string().url()).min(1).max(5)]).describe("The complete URL of the webpage or PDF file to read and convert (e.g., 'https://example.com/article'). Can be a single URL string or an array of up to 5 URLs for parallel reading."),
 				withAllLinks: z.boolean().optional().describe("Set to true to extract and return all hyperlinks found on the page as structured data"),
-				withAllImages: z.boolean().optional().describe("Set to true to extract and return all images found on the page as structured data")
+				withAllImages: z.boolean().optional().describe("Set to true to extract and return all images found on the page as structured data"),
+				question: z.string().optional().describe("Read the page with this question in mind. The page is split into passages and scored with jina-reranker-v3.5, and only the top-ranked passages are returned instead of the full body — the same extraction search_web_deep applies to its result pages. Omit (default) to return the full content unchanged."),
+				tokens: z.number().int().min(1).max(4096).optional().describe("Target passage size when `question` is set (default 100), counted in words, or in characters for CJK text. Passages are only split at sentence boundaries, so this is a target rather than a hard cut. Larger values return more surrounding context per passage; smaller values pinpoint the answer more tightly. Ignored without `question`."),
+				topk: z.number().int().min(1).max(50).optional().describe("How many top-ranked passages to return when `question` is set (default 1). Ignored without `question`.")
 			},
-			async ({ url, withAllLinks, withAllImages }: { url: string | string[]; withAllLinks?: boolean; withAllImages?: boolean }) => {
+			async ({ url, withAllLinks, withAllImages, question, tokens, topk }: { url: string | string[]; withAllLinks?: boolean; withAllImages?: boolean; question?: string; tokens?: number; topk?: number }) => {
 				try {
 					const props = getProps();
+
+					// Chunking and reranking happen after the page has been fetched, so a
+					// question-grounded read needs headroom beyond the plain read budget.
+					const readTimeout = question ? 60000 : 30000;
 
 					// Handle single URL or single-element array
 					if (typeof url === 'string' || (Array.isArray(url) && url.length === 1)) {
@@ -237,7 +244,7 @@ export function registerJinaTools(server: McpServer, getProps: () => any, enable
 						const { readUrlFromConfig } = await import("../utils/read.js");
 
 						// Use the shared utility function
-						const result = await readUrlFromConfig({ url: singleUrl, withAllLinks: withAllLinks || false, withAllImages: withAllImages || false }, props.bearerToken);
+						const result = await readUrlFromConfig({ url: singleUrl, withAllLinks: withAllLinks || false, withAllImages: withAllImages || false, question, tokens, topk }, props.bearerToken);
 
 						if ('error' in result) {
 							return createErrorResponse(result.error);
@@ -253,7 +260,7 @@ export function registerJinaTools(server: McpServer, getProps: () => any, enable
 
 					// Handle multiple URLs with parallel reading
 					if (Array.isArray(url) && url.length > 1) {
-						const urls = url.map(u => ({ url: u, withAllLinks: withAllLinks || false, withAllImages: withAllImages || false }));
+						const urls = url.map(u => ({ url: u, withAllLinks: withAllLinks || false, withAllImages: withAllImages || false, question, tokens, topk }));
 
 						const uniqueUrls = urls.filter((urlConfig, index, self) =>
 							index === self.findIndex(u => u.url === urlConfig.url)
@@ -263,7 +270,7 @@ export function registerJinaTools(server: McpServer, getProps: () => any, enable
 						const { executeParallelUrlReads } = await import("../utils/read.js");
 
 						// Execute parallel URL reads using the utility
-						const results = await executeParallelUrlReads(uniqueUrls, props.bearerToken, 30000);
+						const results = await executeParallelUrlReads(uniqueUrls, props.bearerToken, readTimeout);
 
 						// Format results for consistent output
 						const contentItems: Array<{ type: 'text'; text: string }> = [];
@@ -883,11 +890,14 @@ export function registerJinaTools(server: McpServer, getProps: () => any, enable
 				urls: z.array(z.object({
 					url: z.string().url().describe("The complete URL of the webpage or PDF file to read and convert"),
 					withAllLinks: z.boolean().default(false).describe("Set to true to extract and return all hyperlinks found on the page as structured data"),
-					withAllImages: z.boolean().default(false).describe("Set to true to extract and return all images found on the page as structured data")
+					withAllImages: z.boolean().default(false).describe("Set to true to extract and return all images found on the page as structured data"),
+					question: z.string().optional().describe("Read this page with this question in mind and return only the top-ranked passages instead of the full body. Omit to return full content."),
+					tokens: z.number().int().min(1).max(4096).optional().describe("Passage size in tokens when `question` is set (default 100)"),
+					topk: z.number().int().min(1).max(50).optional().describe("How many top-ranked passages to return when `question` is set (default 1)")
 				})).max(5).describe("Array of URL configurations to read in parallel (maximum 5 URLs for optimal performance)"),
-				timeout: z.number().default(30000).describe("Timeout in milliseconds for all URL reads")
+				timeout: z.number().default(30000).describe("Timeout in milliseconds for all URL reads. Question-grounded reads add a chunking and reranking pass after the fetch, so the effective floor is raised to 60000ms for those.")
 			},
-			async ({ urls, timeout }: { urls: Array<{ url: string; withAllLinks: boolean; withAllImages: boolean }>; timeout: number }) => {
+			async ({ urls, timeout }: { urls: Array<{ url: string; withAllLinks: boolean; withAllImages: boolean; question?: string; tokens?: number; topk?: number }>; timeout: number }) => {
 				try {
 					const props = getProps();
 
@@ -898,8 +908,15 @@ export function registerJinaTools(server: McpServer, getProps: () => any, enable
 					// Import the utility functions
 					const { executeParallelUrlReads } = await import("../utils/read.js");
 
+					// The default 30s budget predates question-grounded reads and would cut
+					// them off mid-rerank. Raise the floor only when a question is actually
+					// asked, and never lower an explicitly larger caller timeout.
+					const effectiveTimeout = uniqueUrls.some(u => u.question)
+						? Math.max(timeout, 60000)
+						: timeout;
+
 					// Execute parallel URL reads using the utility
-					const results = await executeParallelUrlReads(uniqueUrls, props.bearerToken, timeout);
+					const results = await executeParallelUrlReads(uniqueUrls, props.bearerToken, effectiveTimeout);
 
 					// Format results for consistent output
 					const contentItems: Array<{ type: 'text'; text: string }> = [];
