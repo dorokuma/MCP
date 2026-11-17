@@ -17,3 +17,4 @@
 ### Repository-specific release contract
 
 - 本仓发布必须提供可复现的安装/构建说明及兼容性说明；若拆分或存在多个可独立安装组件，必须明确各自分发产物与版本。
+- - **发布边界**：本仓是 Jina AI MCP Server 的公开参考 Fork，版本与正式 Release 由上游项目维护，本仓不创建独立 Tag/GitHub Release。若未来开始分发 Fork 专属补丁或产物，必须先建立独立版本线、CHANGELOG、Tag 与非草稿 GitHub Release。
